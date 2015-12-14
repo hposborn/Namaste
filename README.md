@@ -1,4 +1,4 @@
-#Namaste
+#Namaste: An Mcmc Analysis of Single Transiting Exoplanets
 
 "Single Transit Candidates from K2: Detection and Period Estimation" by Osborn et al is under review at MNRAS.
 
