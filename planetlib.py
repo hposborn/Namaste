@@ -171,7 +171,7 @@ def getKeplerLDs(Ts,logFeH=0.0,logg=4.43812,VT=2.0, type='2'):
         #print(checkint)
     else:
         print("no key...")
-    arr = np.genfromtxt(Namwd+'/KeplerLDLaws.txt',skip_header=2)
+    arr = np.genfromtxt(Namwd+'/Tables/KeplerLDLaws.txt',skip_header=2)
 
     #Rounding Logg and LogFe/H to nearest useable values
     arr=np.hstack((arr[:, 0:3], arr[:, checkint]))
@@ -428,7 +428,7 @@ def getStarDat(kic,file=''):
         try:
             import pandas as pd
             #One problem is that this table is not particularly up to date and has huge Radii errors...
-            koitable=pd.read_csv(Namwd+'/KeplerKOItable.csv',skiprows=155)
+            koitable=pd.read_csv(Namwd+'/Tables/KeplerKOItable.csv',skiprows=155)
             match=koitable[koitable['kepid']==int(kic)]
             return list(abs(np.array([match['koi_steff'].values[0], match['koi_steff_err1'].values[0],  match['koi_steff_err2'].values[0], match['koi_srad'].values[0], match['koi_srad_err1'].values[0],  match['koi_srad_err2'].values[0], match['koi_smass'].values[0], match['koi_smass_err1'].values[0],  match['koi_smass_err2'].values[0]])))
         except KeyError:
@@ -480,7 +480,7 @@ def coloursCheck(mags):
     b,v,j,h,k=mags
     cols=np.array([b-v,v-j,v-h,v-k,j-h,j-k])
     nonan=np.arange(0,len(cols),1)[np.logical_not(np.isnan(cols))]
-    MScols=np.genfromtxt(Namwd+"/MainSeqColours.csv", delimiter=',')
+    MScols=np.genfromtxt(Namwd+"/Tables/MainSeqColours.csv", delimiter=',')
     coltab=np.column_stack(((MScols[:, 3]),(MScols[:, 6]),(MScols[:, 7]), \
         (MScols[:, 8]), (MScols[:, 7])-(MScols[:, 6]), (MScols[:, 8])-(MScols[:, 6])))
     T=np.zeros((len(cols)))
@@ -560,7 +560,7 @@ def K2Guess(EPIC, colours=0, pm=0, errors=0):
     '''
     import csv
     #ROWS: EPIC,RA,Dec,Data Availability,KepMag,HIP,TYC,UCAC,2MASS,SDSS,Object type,Kepflag,pmra,e_pmra,pmdec,e_pmdec,plx,e_plx,Bmag,e_Bmag,Vmag,e_Vmag,umag,e_umag,gmag,e_gmag,rmag,e_rmag,imag,e_imag,zmag,e_zmag,Jmag,e_Jmag,Hmag,e_Hmag,Kmag,e_Kmag
-    reader=csv.reader(open(Namwd+'/EPICcatalogue.csv'))
+    reader=csv.reader(open(Namwd+'/Tables/EPICcatalogue.csv'))
     a=0
     result={}
     for row in reader:

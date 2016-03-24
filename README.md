@@ -42,10 +42,16 @@ Which displays:
 Example lightcurves for KIC 3239945 are provided and can be run with the line:
 	python Namaste.py 3239945 get
 
+### Pre-Requisites###
+Standard python packages: glob, numpy, scipy, matplotlib, csv,
+Non-standard: [george](https://github.com/dfm/george) (version 1.0 or higher), [emcee](https://github.com/dfm/emcee), [corner](https://github.com/dfm/corner)
+
+
 ###Acknowledgements###
 The python modules emcee and george form the engine of this script, and all credit to Dan Foreman-Mackey for that
 Transit-fitting code courtesy of Ian Crossfield.
 
-###Reference ###
+###Attribution ###
+If you make use of this code please cite:
 
 "Single Transit Candidates from K2: Detection and Period Estimation" by Osborn et al, 2016 (http://mnras.oxfordjournals.org/content/457/3/2273.full.pdf or http://arxiv.org/abs/1512.03722)

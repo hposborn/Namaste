@@ -154,15 +154,14 @@ def Run(KIC, lc, guess, nstep=20000, StarDat=[], verbose=True, GP=False):
         #Uniform priors set for each value in params
         #Last two values now gaussian priors for limb darkening params:
 
-        #Setting up emcee minimization. Do we need all this minimization??
-
+        #Setting up emcee minimization.
         ndim = len(params)
         covar = np.zeros((ndim, ndim), dtype=float)
         diag=np.zeros((ndim), dtype=float)
         for ii in range(ndim):
             covar[ii,ii] = 0.35*(abs(bestparams[ii]-priors[ii][0])+abs(bestparams[ii]-priors[ii][1]))
             diag[ii]=0.35*(abs(bestparams[ii]-priors[ii][0])+abs(bestparams[ii]-priors[ii][1]))
-        print "Covar = "+str(covar) if verbose else 0
+        print "Diagonal of Covar = "+str(np.diag(covar)) if verbose else 0
         weights = np.array(lccut[:, 2]**-2, copy=True)
         #fitkw = dict(=priors)
         fitargs = (modelmonotransit, lccut[:, 0], lccut[:, 1], weights, priors) #time, NL, NP, errscale, smallplanet, svs, data, weights, fitkw)
@@ -178,37 +177,35 @@ def Run(KIC, lc, guess, nstep=20000, StarDat=[], verbose=True, GP=False):
         p0 = np.random.multivariate_normal(bestparams, (1e-5)*covar, nwalkers*5)
         p0 = np.vstack((bestparams, p0[0:nwalkers-1]))
 
-        # Run burn-in; exclude and remove bad walkers:
         print "Running first burn-in" if verbose else 0
-        pos, lp, _ = sampler.run_mcmc(p0,1200)
+        pos, lp, _ = sampler.run_mcmc(p0,nstep/5)
         sampler.reset()
         #Checking if Pos actually has variation with this call
         pos=FixingExtent(pos)
 
-        # Run second burn-in; exclude and remove bad walkers:
+        # Run second burn-in.
         print "Running second burn-in" if verbose else 0
-        pos, lp, _ = sampler.run_mcmc(pos,1200)
+        pos, lp, _ = sampler.run_mcmc(pos,nstep/5)
         pos=FixingExtent(pos)
 
         # Run main MCMC run:
         #pdb.set_trace()
-        print str(KIC)+" running initial MCMC" if verbose else 0
+        print str(KIC)+" running main MCMC" if verbose else 0
         sampler.reset()
         pos, prob, state = sampler.run_mcmc(pos, nstep)
 
         # Test if MCMC found a better chi^2 region of parameter space:
-        mcmc_params = sampler.flatchain[np.nonzero(sampler.lnprobability.ravel()==sampler.lnprobability.ravel().max())[0][0]]
+        mcmc_params = sampler.chain[:,:,:].reshape((-1,len(bestparams)))#sampler.flatchain[np.nonzero(sampler.lnprobability.ravel()==sampler.lnprobability.ravel().max())[0][0]]
         mcmc_fit = optimize.leastsq(devfuncup, mcmc_params, args=fitargs, full_output=True, xtol=xtol, ftol=ftol)
+
         if errfunc(mcmc_fit[0], *fitargs) < errfunc(bestparams, *fitargs):
             bestparams = mcmc_fit[0]
             print "Found a better fit from minimizing." if verbose else 0
         else:
             pass
 
-        lsq_fit = optimize.leastsq(devfuncup, bestparams, args=fitargs, full_output=True, xtol=xtol, ftol=ftol)
+        lsq_fit = optimize.minimize(errfunc, bestparams, args=fitargs)#, xtol=xtol, ftol=ftol)
         bestparams = lsq_fit['x']
-        covar = lsq_fit['cov_x']
-        bestchisq = errfunc(bestparams, *fitargs)
 
         finalmodel = PlotModel(lccut, mcmc_params,verbose=verbose)
 
@@ -249,7 +246,8 @@ def Run(KIC, lc, guess, nstep=20000, StarDat=[], verbose=True, GP=False):
         initial_fit = optimize.minimize(nll, initial, args=(model, lccut[:,1]), method="L-BFGS-B")#optimize.leastsq(devfuncup, mcmc_params, args=fitargs, full_output=True, xtol=xtol, ftol=ftol)
         print "Initial params = "+str(initial) if verbose else 0
         print "Initial minimized = "+str(initial_fit['x']) if verbose else 0
-        print "Initial minimized = "+str(initial_fit['x']/initial) if verbose else 0
+        print "Initial minimized ratio = "+str(initial_fit['x']/initial) if verbose else 0
+
         if lnprobGP(initial_fit['x'], *fitargs) > lnprobGP(initial, *fitargs) and lnpriorGP(initial_fit['x'],priors)!=-np.inf:
             initial=initial_fit['x']
             print lnprobGP(initial_fit['x'], *fitargs)/lnprobGP(initial, *fitargs)
@@ -365,6 +363,10 @@ def PlotMCMC(params,  EPIC, sampler, lc, GP=False, KepName=''):
     #Turning b into absolute...
     samples[:,1]=abs(samples[:,1])
     p.figure(1)
+
+    #Clipping extreme values (top.bottom 0.1 percentiles)
+    toclip=np.array([(np.percentile(samples[:,t],99.9)>samples[:,t]) // (samples[:,t]>np.percentile(samples[:,t],0.1)) for t in range(len(params))]).all(axis=0)
+    samples=samples[toclip]
 
     #Earmarking the difference between GP and non
     labs = ["$T_{c}$","$b$","$v$","$Rp/Rs$","$u1$","$u2$","$\sigma_{white}$","$tau$","$a$"] if GP\
@@ -486,15 +488,14 @@ def PlotModel(lccut, sampler, models='', residuals=False, scale=1, nx=10000,GP=F
         print np.shape(np.hstack((newmodelfits[:,2]-(newmodelfits[:,2]-newmodelfits[:,1]),(newmodelfits[:,2]+(newmodelfits[:,3]-newmodelfits[:,2]))[::-1])))
         print np.shape(np.hstack((t,t[::-1])))
         #Plotting 1-sigma error region and models
-        p.fill(np.hstack((t,t[::-1])),np.hstack((newmodelfits[:,2]-(newmodelfits[:,2]-newmodelfits[:,1]),(newmodelfits[:,2]+(newmodelfits[:,3]-newmodelfits[:,2]))[::-1])),'#33BBFF', linewidth=0,label='1-sigma uncertainties scaled by '+str(scale*100)+'%',alpha=0.5)
+        p.fill(np.hstack((t,t[::-1])),np.hstack((newmodelfits[:,2]-(newmodelfits[:,2]-newmodelfits[:,1]),(newmodelfits[:,2]+(newmodelfits[:,3]-newmodelfits[:,2]))[::-1])),'#33BBFF', linewidth=0,label='$1-\sigma$ region ('+str(scale*100)+'% scaled)',alpha=0.5)
         p.plot(t,newmodelfits[:,2],'-',color='#003333',linewidth=2.0,label='Median model fit')
         p.pause(5)
 
-    p.savefig('SavingModelPlotTest.png')
     if not residuals:
         #Putting title on upper (non-residuals) graph
         p.title('Best fit model')
-        p.legend()
+        p.legend(loc=3)
     return modelfits
 
 '''
@@ -513,6 +514,10 @@ def StartSingleRun(kic):
 '''
 
 def SaveOutputs(KIC, lsq_fit, finalmodel, lc, samplercut, Rps, Ps, As, StarDat, sigs=np.array([2.2750131948178987, 15.865525393145707, 50.0, 84.13447460685429, 97.7249868051821])):
+    #Creating Output directory
+    if not os.path.exists(Namwd+'/Outputs/'):
+        os.system('mkdir Namwd/Outputs/')
+
     print 'Saving '+str(KIC)+' outputs to file'
     np.save(Namwd+'/Outputs/'+str(KIC)+"lsq_fit", lsq_fit)
     np.save(Namwd+'/Outputs/'+str(KIC)+"finalmodel", finalmodel)
