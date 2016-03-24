@@ -17,10 +17,7 @@ And saves a triangle plot, output values and ''sampler'' file to disc
 '''
 
 import numpy as np
-import pandas as pd
-import glob
 import pylab as p
-#import me.planetlib as pl
 #from StellarFits import *
 from Monotransit import *
 from planetlib import *
@@ -33,7 +30,7 @@ import pylab as p
 #Getting working directory of Namaste
 Namwd = path.dirname(path.realpath(__file__))
     
-def Run(KIC, lc, guess, nstep=20000, StarDat=[], verbose=False, GP=False):
+def Run(KIC, lc, guess, nstep=20000, StarDat=[], verbose=True, GP=False):
     '''
     INPUTS:
         KIC as EPIC (K2) or KIC (Kepler) identifier
@@ -57,14 +54,15 @@ def Run(KIC, lc, guess, nstep=20000, StarDat=[], verbose=False, GP=False):
         lc,h=getKeplerLC(KIC)
     elif type(lc)==str:
         lc,h=ReadLC(lc)
-    print h
 
     #Doing manual transit search if transit unknown
     if 0 in guess:
         guess=FindTransitManual(KIC, lc, cut=25.0)
     NoPrevious=True
-    if path.isfile(Namwd+'/Outputs/'+str(KIC)+"sampler.npy"):
-        #Finding previous output file. Using this instead of guess
+
+    #Finding previous output file. Using this instead of guess
+    FindPrev=False
+    if path.isfile(Namwd+'/Outputs/'+str(KIC)+"sampler.npy") and FindPrev==True:
         NoPrevious=False
         sams=np.load(Namwd+'/Outputs/'+str(KIC)+"sampler.npy")
         sams[:, 1]=abs(sams[:, 1])
@@ -84,37 +82,64 @@ def Run(KIC, lc, guess, nstep=20000, StarDat=[], verbose=False, GP=False):
         params=[Tcen, 0.4, CalcVel(Tdur, 0.4, ratio), ratio, np.median(lc[abs(lc[:, 0]-Tcen)>1.1*Tdur, 1]), 0,0]
     if StarDat==[]:
         StarDat=getStarDat(KIC)
-    
+    print str(KIC)+" Stellar data = "+str(StarDat) if verbose else 0
+
     #Getting Quadratic Limb Darkening Paramters from Temperature:
     LD=getKeplerLDs(StarDat[0])
     LDRange=np.array([getKeplerLDs(StarDat[0]+StarDat[1]), getKeplerLDs(StarDat[0]-StarDat[2])])
     params[-2:]=LD
 
-    #Cutting lightcurve to 15 Tdurs. Then flattening lightcurve
-    lc=lc[np.where(abs(lc[:, 0]-Tcen)<Tdur*25.0)[0]]
+    #Initialising Priors in form [uniform-,uniform+,gauss_mean,gauss_fwhm]
+    priors=np.array([[params[0]-2*Tdur, params[0]+2*Tdur,0,0], \
+                     [-1.2, 1.2,0,0], \
+                     [0.0, CalcVel(Tdur*0.75, 0.0, 0.3),0,0], \
+                     [0, 0.3,0,0], \
+                     [0.95, 1.05,0,0], \
+                     [0,1.0,LD[0], np.max(abs(LD[0]-LDRange[:, 0]))], \
+                     [0,1.0,LD[1], np.max(abs(LD[1]-LDRange[:, 1]))]\
+                     ])#reshaping into columns
+    '''
+    Priors:
+    tcen:   +/- 2*Tdur
+    b:      -1.2 : +1.2
+    vel:    0 : max vel for 75% Tdur at b=0 and p0=0.3
+    p0:     0 : 0.3
+    u1:     Use Gauss u1 pm err
+    u2:     Use Gauss u2 pm err
+    wn:     Gamma prior +=(e-100*wn)
+    a:      Gamma prior +=(e-100*a)
+    tau:    Gamma prior +=(e-100*tau)
+    '''
 
-    uniformprior=np.array([[params[0]-2*Tdur, params[0]+2*Tdur], [-1.2, 1.2], [0.0, CalcVel(Tdur*0.95, 0.0, 0.3)], [0, 0.3], [0.95, 1.05], [LD[0], np.max(abs(LD[0]-LDRange[:, 0]))], [LD[1], np.max(abs(LD[1]-LDRange[:, 1]))]])
-    #print len(uniformprior)
-    #print [[uniformprior[5][0], uniformprior[5][1]], [uniformprior[6][0], uniformprior[6][1]]]
+    #Finding jumps in lightcurve (where diff t > 1.0. GP or lcf may fail here). Cutting around these.
+    jumps=np.hstack((0,np.where(np.diff(lc[:,0])>1.0)[0]+1))
+    if len(jumps)>2:
+        idx=np.searchsorted(lc[jumps,0],Tcen)
+        lc=lc[jumps[idx-1]:jumps[idx],:]
+    else:
+        lc=lc[abs(Tcen-lc[:,0])<30.0,:]
+
     xtol=1e-11; ftol=1e-9
+
+    #Setting number of threads based on number of cores...
+    try:
+        import multiprocessing
+        nthread=int(multiprocessing.cpu_count())
+    except:
+        #Default=4
+        nthread=4
 
     #Diverging the GP versions here:
     if not GP:
-        print "Running Namaste without GP"
+        print "Running Namaste without GP" if verbose else 0
+
         #Flattening lightcurve
-        print lc
-        lc=k2f(lc, stepsize=Tdur/2.0, winsize=Tdur*8.5,  niter=40)
+        lc=k2f(lc, stepsize=Tdur/2.0, winsize=Tdur*6.7,  niter=40)
         #Further cutting lightcurve around transit
-        lccut=lc[np.where(abs(lc[:, 0]-Tcen)<Tdur*6.0)[0]]
+        lccut=lc[abs(lc[:, 0]-Tcen)<Tdur*6.0,:]
 
         #Guesing b as 0.4 to begin with.
         bestparams=np.array(params, copy=True)
-        if verbose==1:
-            PlotLC(lccut)
-            p.plot(np.arange(lccut[0, 0], lccut[-1, 0], 0.001), modelmonotransit(params, np.arange(lccut[0, 0], lccut[-1, 0], 0.001)))
-            p.title('Initial Fit with'+str(params))
-            #p.pause(5)
-            #p.clf()
 
         '''
             PARAMS are:
@@ -131,59 +156,43 @@ def Run(KIC, lc, guess, nstep=20000, StarDat=[], verbose=False, GP=False):
 
         #Setting up emcee minimization. Do we need all this minimization??
 
-
         ndim = len(params)
         covar = np.zeros((ndim, ndim), dtype=float)
         diag=np.zeros((ndim), dtype=float)
         for ii in range(ndim):
-            covar[ii,ii] = 0.35*(abs(bestparams[ii]-uniformprior[ii][0])+abs(bestparams[ii]-uniformprior[ii][1]))
-            diag[ii]=0.35*(abs(bestparams[ii]-uniformprior[ii][0])+abs(bestparams[ii]-uniformprior[ii][1]))
-
+            covar[ii,ii] = 0.35*(abs(bestparams[ii]-priors[ii][0])+abs(bestparams[ii]-priors[ii][1]))
+            diag[ii]=0.35*(abs(bestparams[ii]-priors[ii][0])+abs(bestparams[ii]-priors[ii][1]))
+        print "Covar = "+str(covar) if verbose else 0
         weights = np.array(lccut[:, 2]**-2, copy=True)
-        #fitkw = dict(=uniformprior)
-        fitargs = (modelmonotransit, lccut[:, 0], lccut[:, 1], weights, uniformprior) #time, NL, NP, errscale, smallplanet, svs, data, weights, fitkw)
+        #fitkw = dict(=priors)
+        fitargs = (modelmonotransit, lccut[:, 0], lccut[:, 1], weights, priors) #time, NL, NP, errscale, smallplanet, svs, data, weights, fitkw)
 
         bestchisq = errfunc(bestparams, *fitargs)
 
-        nwalkers =20 * ndim
-        nthread=4
+        nwalkers = 20 * ndim
 
         # Initialize sampler:
-        sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprobfunc, args=fitargs, threads=4)
+        print "Initializing sampler" if verbose else 0
+        sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprobfunc, args=fitargs, threads=nthread)
 
-        p0 = np.random.multivariate_normal(bestparams, covar, nwalkers*5)
-        badp0 = ((abs(p0[:,1]) >1.5) + (p0[:,2] < 0) + (p0[:,3] < 0) + (p0[:,4] < 0))
-        p0 = np.vstack((bestparams, p0[np.nonzero(True-badp0)[0][0:nwalkers-1]]))
-        pos = p0
+        p0 = np.random.multivariate_normal(bestparams, (1e-5)*covar, nwalkers*5)
+        p0 = np.vstack((bestparams, p0[0:nwalkers-1]))
 
         # Run burn-in; exclude and remove bad walkers:
+        print "Running first burn-in" if verbose else 0
+        pos, lp, _ = sampler.run_mcmc(p0,1200)
+        sampler.reset()
+        #Checking if Pos actually has variation with this call
+        pos=FixingExtent(pos)
+
+        # Run second burn-in; exclude and remove bad walkers:
+        print "Running second burn-in" if verbose else 0
         pos, lp, _ = sampler.run_mcmc(pos,1200)
-
-        for ii in range(2):
-            pos, prob, state = sampler.run_mcmc(pos, max(1, (ii+1)*nstep/5))
-            if (bestchisq + 2*max(prob)) > ftol: #-2*prob < bestchisq).any(): # Found a better fit! Optimize:
-                #if verbose: print "Found a better fit; re-starting MCMC... (%1.8f, %1.8f)" % (bestchisq, (bestchisq + 2*max(prob)))
-                print str(KIC)+" - Found a better fit; re-starting MCMC..."
-                #pdb.set_trace()
-                bestparams = pos[(prob==prob.max()).nonzero()[0][0]].copy()
-                lsq_fit = optimize.leastsq(devfuncup, bestparams, args=fitargs, full_output=True, xtol=xtol, ftol=ftol)
-                bestparams = lsq_fit[0]
-                covar = lsq_fit[1]
-                bestchisq = errfunc(bestparams, *fitargs)
-                ii = 0 # Re-start the burn-in.
-                #pos[prob < np.median(prob)] = bestparams
-            badpos = (prob < np.median(prob))
-            if (pos[True-badpos].std(0) <= 0).any():
-                goodpos_unc = np.vstack((np.abs(bestparams / 50.), pos[True-badpos].std(0))).max(0)
-                pos[badpos] = np.random.normal(bestparams, goodpos_unc, (badpos.sum(), ndim))
-            else:
-                pos[badpos]  = np.random.multivariate_normal(bestparams, np.cov(pos[True-badpos].transpose()), badpos.sum())
-
-        pos[badpos] = bestparams
+        pos=FixingExtent(pos)
 
         # Run main MCMC run:
         #pdb.set_trace()
-        print str(KIC)+" running initial MCMC"
+        print str(KIC)+" running initial MCMC" if verbose else 0
         sampler.reset()
         pos, prob, state = sampler.run_mcmc(pos, nstep)
 
@@ -192,20 +201,25 @@ def Run(KIC, lc, guess, nstep=20000, StarDat=[], verbose=False, GP=False):
         mcmc_fit = optimize.leastsq(devfuncup, mcmc_params, args=fitargs, full_output=True, xtol=xtol, ftol=ftol)
         if errfunc(mcmc_fit[0], *fitargs) < errfunc(bestparams, *fitargs):
             bestparams = mcmc_fit[0]
+            print "Found a better fit from minimizing." if verbose else 0
         else:
             pass
 
         lsq_fit = optimize.leastsq(devfuncup, bestparams, args=fitargs, full_output=True, xtol=xtol, ftol=ftol)
-        bestparams = lsq_fit[0]
-        covar = lsq_fit[1]
+        bestparams = lsq_fit['x']
+        covar = lsq_fit['cov_x']
         bestchisq = errfunc(bestparams, *fitargs)
+
+        finalmodel = PlotModel(lccut, mcmc_params,verbose=verbose)
+
     elif GP:
+        import george
         #Running the emcee with Gaussian Processes.
-        print "Running Namaste with GP (George)"
+        print "Running Namaste with GP (George)" if verbose else 0
 
         #Removing 'Flux' term from parameters (GP will fit this)
-        params=np.hstack((params[0:3],params[4:]))
-        uniformprior=np.hstack((uniformprior[0:3],uniformprior[4:]))
+        params=np.hstack((params[0:4],params[5:]))
+        priors=np.vstack((priors[0:4,:],priors[5:,:]))
 
         if george.__version__[0]!='1':
             print "This script uses George 1.0."
@@ -213,8 +227,10 @@ def Run(KIC, lc, guess, nstep=20000, StarDat=[], verbose=False, GP=False):
             print "Or download with pip using \"pip install git+http://github.com/dfm/george.git@1.0-dev\" "
             return None
         #Running it on 15-Tdur-wide window
-        lccut=lc[np.where(abs(lc[:, 0]-Tcen)<Tdur*15.0)[0]]
+        lccut=lc[np.where(abs(lc[:, 0]-Tcen)<Tdur*8.0)[0]]
+        print "Training GP on out-of-transit data" if verbose else 0
         gp, res, lnlikfit = TrainGP(lc,Tcen,h[3])
+
         newmean,newwn,a,tau=res
 
         #Initialising Monotransit class.
@@ -223,12 +239,20 @@ def Run(KIC, lc, guess, nstep=20000, StarDat=[], verbose=False, GP=False):
         mono.set_vector(newparams[:6])
 
         #Setting up george variable
+        print "Initialising george fitting model" if verbose else 0
         model=george.GP(np.exp(newparams[-2])*george.kernels.ExpSquaredKernel(np.exp(newparams[-1])),mean=mono,fit_mean=True,white_noise=newparams[-3],fit_white_noise=True)
         model.compute(lccut[:,0],lccut[:,2])
         #Setting up emcee run
-        fitargs = (lccut[:,1], uniformprior,model)
-        initial = model.get_vector()
-
+        fitargs = (lccut[:,1], priors, model)
+        bestparams = model.get_vector()
+        initial = np.copy(bestparams)
+        initial_fit = optimize.minimize(nll, initial, args=(model, lccut[:,1]), method="L-BFGS-B")#optimize.leastsq(devfuncup, mcmc_params, args=fitargs, full_output=True, xtol=xtol, ftol=ftol)
+        print "Initial params = "+str(initial) if verbose else 0
+        print "Initial minimized = "+str(initial_fit['x']) if verbose else 0
+        print "Initial minimized = "+str(initial_fit['x']/initial) if verbose else 0
+        if lnprobGP(initial_fit['x'], *fitargs) > lnprobGP(initial, *fitargs) and lnpriorGP(initial_fit['x'],priors)!=-np.inf:
+            initial=initial_fit['x']
+            print lnprobGP(initial_fit['x'], *fitargs)/lnprobGP(initial, *fitargs)
         '''
         PARAMS (initial) are:
             the time of conjunction for each individual transit (Tc),  0.1
@@ -245,65 +269,67 @@ def Run(KIC, lc, guess, nstep=20000, StarDat=[], verbose=False, GP=False):
         covar = np.zeros((ndim, ndim), dtype=float)
         diag=np.zeros((ndim), dtype=float)
         for ii in range(ndim):
-            if ii<len(uniformprior):
-                covar[ii,ii] = 0.25*(abs(initial[ii]-uniformprior[ii][0])+abs(initial[ii]-uniformprior[ii][1]))
-                diag[ii]=0.25*(abs(initial[ii]-uniformprior[ii][0])+abs(initial[ii]-uniformprior[ii][1]))
+            if ii<4:
+                covar[ii,ii] = 0.05*(abs(initial[ii]-np.min(priors[ii]))+abs(initial[ii]+np.max(priors[ii])))
+                diag[ii]=0.05*(abs(initial[ii]-priors[ii][0])+abs(initial[ii]-priors[ii][1]))
             else:
                 #GP objects dont have priors... Using square root of absolute GP params
-                covar[ii,ii] = 0.25*np.sqrt(abs(initial[ii]))*(1.0 if initial[ii]>0 else -1.0)
-                diag[ii]= 0.25*np.sqrt(abs(initial[ii]))*(1.0 if initial[ii]>0 else -1.0)
+                covar[ii,ii] = 0.05*np.sqrt(abs(initial[ii]))*(1.0 if initial[ii]>0 else -1.0)
+                diag[ii]= 0.05*np.sqrt(abs(initial[ii]))*(1.0 if initial[ii]>0 else -1.0)
 
-        print initial
-        print covar
-        p0 = np.vstack((initial, np.random.multivariate_normal(initial, covar, nwalkers)))
+
+        print "Covariance diagonal = "+str(np.diag(covar)) if verbose else 0
+        p0 = np.vstack((initial, np.random.multivariate_normal(initial, (1e-5)*covar, nwalkers-1)))
         #p0 = initial + 1e-6 * np.random.randn(nwalkers, ndim) #Replaced
 
-        sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprobGP, args=fitargs)
+        sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprobGP, args=fitargs,threads=nthread)
 
 
-        print("Running burn-in...")
-        p0, prob, state = sampler.run_mcmc(p0, nstep/5)
-        print sampler
-        print p0
-        PlotModel(lccut, sampler, GP=True)
+        print("Running first burn-in with "+str(nstep/5)+" iterations...") if verbose else 0
+        newp0, _, _ = sampler.run_mcmc(p0, nstep/5)
+        newp0=FixingExtent(newp0)
         sampler.reset()
 
-        print("Running production...")
-        pos, prob, state = sampler.run_mcmc(p0, nstep);
+        print("Running second burn-in with "+str(nstep/5)+" iterations...") if verbose else 0
+        newp0, _, _ = sampler.run_mcmc(newp0, nstep/5)
+        newp0=FixingExtent(newp0)
+        PlotModel(lccut, sampler.chain[:,:,:].reshape((-1,len(initial))), GP=True,verbose=verbose)
+
+        print "sampler stds"+str(np.std(sampler.flatchain[np.nonzero(sampler.lnprobability.ravel()==sampler.lnprobability.ravel().max())[0][0]],axis=0))
+        sampler.reset()
+
+        print("Running production...") if verbose else 0
+        pos, prob, state = sampler.run_mcmc(newp0, nstep);
         mcmc_params = sampler.flatchain[np.nonzero(sampler.lnprobability.ravel()==sampler.lnprobability.ravel().max())[0][0]]
-        mcmc_fit = optimize.leastsq(devfuncup, mcmc_params, args=fitargs, full_output=True, xtol=xtol, ftol=ftol)
+        newbestparams=np.median(sampler.chain[:,:,:].reshape((-1,len(initial))),axis=0)
 
-        if lnprobGP(mcmc_fit[0], *fitargs) < lnprobGP(bestparams, *fitargs):
-            bestparams = mcmc_fit[0]
+        #Running another minimization and taking the new paramteres if theyre better (and within priors)
+        lsq_fit = optimize.minimize(nll, newbestparams, args=(model, lccut[:,1], priors), method="L-BFGS-B")#optimize.leastsq(devfuncup, mcmc_params, args=fitargs, full_output=True, xtol=xtol, ftol=ftol)
+        if lnprobGP(lsq_fit['x'], *fitargs) > lnprobGP(newbestparams, *fitargs) and lnpriorGP(initial_fit['x'],priors)!=-np.inf:
+            bestparams = lsq_fit['x']
         else:
-            pass
+            bestparams = newbestparams
 
-    finalmodel = modelmonotransit(bestparams, fitargs[1])
-    print str(KIC)+" finished MCMC"
-    return lsq_fit, sampler, weights, finalmodel, StarDat,  lccut
+        #Plotting and returning the model:
+        ymodel=PlotModel(lccut, sampler.chain[:,:,:].reshape((-1,len(initial))), GP=True,verbose=verbose)
+        model.set_vector(bestparams)
+        finalmodel=ymodel
+
+    #finalmodel = modelmonotransit(bestparams, fitargs[1])
+    print str(KIC)+" finished MCMC" if verbose else 0
+    return lsq_fit, sampler, finalmodel, StarDat,  lccut
 
 def Pmin(lc, Tcen, Tdur):
     #Calculating minimum period from the lightcurve
     return np.max(abs(Tcen-lc[:, 0]))-Tdur
 
-def nll(p,gp,y):
-    gp.set_vector(p)
-    ll = gp.lnlikelihood(y, quiet=True)
-    return -ll if np.isfinite(ll) else 1e25
-
-# And the gradient of the objective function.
-def grad_nll(p,gp,y):
-    gp.set_vector(p)
-    return -gp.grad_lnlikelihood(y, quiet=True)
-
 def FixingExtent(pos):
     #Finding out if the MCMC has converged on a single value anywhere, and fixing this to add artificial variation
-    NoExtent=np.where(np.std(pos, axis=0)<1e-6)[0]
+    NoExtent=np.where(np.std(pos, axis=0)<1e-4)[0]
     if len(NoExtent)>0:
         for p in NoExtent:
-            #Finding out how many times less than 1e-6 the standard deviation is, and multiplying by that difference to get it back to acceptable levels
-            ratiobelow=1e-6/np.std(pos[:, p])
-            pos[:, p]*=np.random.normal(1.5*ratiobelow, 0.5*ratiobelow, len(pos[:, p]))
+            #Bumping pos back up to variations of 10e-5 if there is NoExtent
+            pos[:, p]*=np.random.normal(1.0, 1.0e-5, len(pos[:, p]))
     return pos
 
 def CalcTdur(vel, b, p):
@@ -319,51 +345,66 @@ def CalcVel(Tdur, b, p):
 def VelToOrbit(Vel, Rs, Ms, ecc=0, omega=0):
     '''Takes in velocity (in units of stellar radius), Stellar radius estimate and (later) eccentricity & angle of periastron.
     Returns Semi major axis (AU) and period (days)'''
-    import me.constants as c
-    Rs=Rs*c.Rsun if Rs<5 else Rs
-    Ms=Ms*c.Msun if Ms<5 else Ms
-    SMA=(c.G*Ms)/((Vel*Rs/86400.)**2)
+    Rs=Rs*695500000 if Rs<5 else Rs
+    Ms=Ms*1.96e30 if Ms<5 else Ms
+    SMA=(6.67e-11*Ms)/((Vel*Rs/86400.)**2)
     Per=(2*np.pi*SMA)/(Vel*Rs/86400)
-    return SMA/c.AU, Per
+    return SMA/1.49e11, Per
 
-def PerToVel(Period, Rs, Ms):
+def PerToVel(Period, Rs, Ms,dens=0):
+    #Check this from paper...
     return ((2*np.pi*6.67e-11*Ms*1.96e30)/(Period*86400*(Rs*695000000)**3))**(1/3.)
 
-def PlotMCMC(params,  EPIC, sampler, lc, KepName=''):
-    import pylab as p
-    import triangle
+def PlotMCMC(params,  EPIC, sampler, lc, GP=False, KepName=''):
+    import corner
     if type(sampler)!=np.ndarray:
         samples = sampler.chain[:, -10000:, :].reshape((-1, len(params)))
     else:
         samples=sampler
+
     #Turning b into absolute...
     samples[:,1]=abs(samples[:,1])
-    #np.savetxt('Kep103B.txt', samples)
     p.figure(1)
-    fig = triangle.corner(samples, labels=["$T_{c}$","$b$","$v$","$Rp/Rs$","$u1$","$u2$","$tau$","$a$"],quantiles=[0.16, 0.5, 0.84], plot_datapoints=False)
-    #Plotting model in top right
-    p.subplot(7,7,10).axis('off')
+
+    #Earmarking the difference between GP and non
+    labs = ["$T_{c}$","$b$","$v$","$Rp/Rs$","$u1$","$u2$","$\sigma_{white}$","$tau$","$a$"] if GP\
+        else ["$T_{c}$","$b$","$v$","$Rp/Rs$","$F_0$","$u1$","$u2$"]
+
+    #This plots the corner:
+    fig = corner.corner(samples, label=labs, quantiles=[0.16, 0.5, 0.84], plot_datapoints=False)
+
+    #Making sure the lightcuvre plot doesnt overstep the corner
+    ndim=np.shape(samples)[1]
+    rows=(ndim-1)/2
+    cols=(ndim-1)/2
+
+    #Printing Kepler name on plot
+    p.subplot(ndim,ndim,ndim+3).axis('off')
     if KepName=='':
         if str(int(EPIC)).zfill(9)[0]=='2':
             KepName='EPIC'+str(EPIC)
         else:
             KepName='KIC'+str(EPIC)
     p.title(KepName, fontsize=22)
-    ax = p.subplot2grid((7,7), (0, 4), rowspan=2, colspan=3)
-    #p.errorbar(lc[:, 0], lc[:, 1], yerr=lc[:, 1], fmt='.',color='#EEEEEE')
-    #p.plot(lc[:, 0], lc[:, 1], '.',color='#')
-    modelfits=PlotModel(lc,  samples,scale=3)
-    #plotting residuals:
-    ax = p.subplot2grid((7,7), (2, 4), rowspan=1, colspan=3)
-    modelfits=PlotModel(lc,  samples, modelfits, residuals=True, scale=3)
-    if os.path.exists('/home/astro/phrnbe/SinglesSC/TestMCMCs/Pcorner_fit_'+str(EPIC)+'Aug.pdf'):
-        if os.path.exists('/home/astro/phrnbe/SinglesSC/TestMCMCs/Pcorner_fit_'+str(EPIC)+'2Aug.pdf'):
-            fname='/home/astro/phrnbe/SinglesSC/TestMCMCs/Pcorner_fit_'+str(EPIC)+'3Aug.pdf'
+
+    #This plots the model on the same plot as the corner
+    ax = p.subplot2grid((ndim,ndim), (0, ndim-cols), rowspan=rows-1, colspan=cols)
+    modelfits=PlotModel(lc, samples, scale=1.0, GP=True)
+
+    #plotting residuals beneath:
+    ax = p.subplot2grid((ndim,ndim), (rows-1, ndim-cols), rowspan=1, colspan=cols)
+    modelfits=PlotModel(lc,  samples, modelfits, residuals=True, GP=True, scale=1.0)
+
+    #Saving as pdf. Will save up to 3 unique files.
+    if os.path.exists(Namwd+'/Outputs/Corner_'+str(EPIC)+'_1.pdf'):
+        if os.path.exists(Namwd+'/Outputs/Corner_'+str(EPIC)+'_2.pdf'):
+            fname=Namwd+'/Outputs/Corner_'+str(EPIC)+'_3.pdf'
         else:
-            fname='/home/astro/phrnbe/SinglesSC/TestMCMCs/Pcorner_fit_'+str(EPIC)+'2Aug.pdf'
+            fname=Namwd+'/Outputs/Corner_'+str(EPIC)+'_2.pdf'
     else:
-        fname='/home/astro/phrnbe/SinglesSC/TestMCMCs/Pcorner_fit_'+str(EPIC)+'Aug.pdf'
+        fname=Namwd+'/Outputs/Corner_'+str(EPIC)+'_1.pdf'
     p.savefig(fname,Transparent=True,dpi=300)
+
     return modelfits
     
 def GetVel(sampler, StarDat, nsamp):
@@ -386,13 +427,10 @@ def GetVel(sampler, StarDat, nsamp):
     #Putting gaussians through
     #Rtests=np.random.rand
     #.argsort()[int(np.round(0.16*5000))]
-    sigs=[6.76676416,   18.39397206,   50.,81.60602794,93.23323584]
-    #print np.percentile(np.array(Krvs), sigs)
-    #print np.percentile(np.array(Mps)/c.Mjup, sigs)
-    #print np.percentile(np.array(Rplans), sigs)
+    sigs=np.array([2.2750131948178987, 15.865525393145707, 50.0, 84.13447460685429, 97.7249868051821]) #68,95,99.7% percentile bounds.
     return np.percentile(np.array(Rplans), sigs),  np.percentile(np.array(Ps), sigs), np.percentile(np.array(Smas), sigs), np.percentile(np.array(Krvs), sigs)
 
-def PlotModel(lccut, sampler, models='', residuals=False, scale=1, nx=10000,GP=0,monomodel=0):
+def PlotModel(lccut, sampler, models='', residuals=False, scale=1, nx=10000,GP=False,monomodel=0, verbose=True):
     '''This plots the single transit, with the uncertainty area of the fit (scaled by ''scale'' parameter for ease of view)
     If residuals, the model is subtracted with only residuals left.
     #Inputs:
@@ -423,60 +461,63 @@ def PlotModel(lccut, sampler, models='', residuals=False, scale=1, nx=10000,GP=0
     else:
         params=np.median(sampler,axis=0)
         if monomodel==0:
-            monomodel=Monotransit(params)
+            monomodel=Monotransit(params[:-3])
+        #Setting up GP to model
         model=george.GP(np.exp(params[-2])*george.kernels.ExpSquaredKernel(np.exp(params[-1])),mean=monomodel,fit_mean=True,white_noise=params[-3],fit_white_noise=True)
-        model.compute(lc[:,1],lc[:,2])
-        ypreds,varpreds=model.predict(lc[:,1], np.arange(lc[0,0],lc[-1,0],0.01))
+        model.compute(lccut[:,0],lccut[:,2])
+        ypreds,varpreds=model.predict(lccut[:,1], t)
         stds=np.sqrt(np.diag(varpreds))
-        #Turing into y-2s,y-1s,y,y+1s,y+2s format.
+        #Turning into y-2s,y-1s,y,y+1s,y+2s format.
         modelfits=np.column_stack((ypreds-stds*2,ypreds-stds,ypreds,ypreds+stds,ypreds+stds*2))
             #,np.percentile(modelouts,[6.76676416,   18.39397206,   50., 81.60602794,93.23323584],axis=1)
-        modelfits=np.swapaxes(modelfits, 1, 0)
-
     newmodelfits=np.copy(modelfits)
+
     if residuals:
         #Subtracting bestfit model from both flux and model to give residuals
         newmodelfits=modelfits-np.tile(modelfits[:,2], (5, 1)).swapaxes(0, 1) #subtracting median fit
         lccut[:,1]-=modelfits[:, 2][(np.round((lccut[:,0]-lccut[0,0])/0.020431700249901041)).astype(int)]
     #p.xlim([t[np.where(redfits[:,2]==np.min(redfits[:,2]))]-1.6, t[np.where(redfits[:,2]==np.min(redfits[:,2]))]+1.6])
 
-    #Plotting data
-    p.errorbar(lccut[:, 0], lccut[:,1], yerr=lccut[:, 2], fmt='.',color='#999999')
-    p.plot(lccut[:, 0], lccut[:,1], '.',color='#333399')
+    if verbose:
+        #Plotting data
+        p.errorbar(lccut[:, 0], lccut[:,1], yerr=lccut[:, 2], fmt='.',color='#999999')
+        p.plot(lccut[:, 0], lccut[:,1], '.',color='#333399')
 
-    #Plotting 1-sigma error region and models
-    p.fill(np.hstack((t,t[::-1])),np.hstack((newmodelfits[:,2]-(newmodelfits[:,2]-newmodelfits[:,1]),(newmodelfits[:,2]+(newmodelfits[:,3]-newmodelfits[:,2]))[::-1])),'#33BBFF', linewidth=0,label='1-sigma uncertainties scaled by '+str(scale*100)+'%',alpha=0.5)
-    p.plot(t,newmodelfits[:,2],'-',color='#003333',linewidth=2.0,label='Median model fit')
+        print np.shape(np.hstack((newmodelfits[:,2]-(newmodelfits[:,2]-newmodelfits[:,1]),(newmodelfits[:,2]+(newmodelfits[:,3]-newmodelfits[:,2]))[::-1])))
+        print np.shape(np.hstack((t,t[::-1])))
+        #Plotting 1-sigma error region and models
+        p.fill(np.hstack((t,t[::-1])),np.hstack((newmodelfits[:,2]-(newmodelfits[:,2]-newmodelfits[:,1]),(newmodelfits[:,2]+(newmodelfits[:,3]-newmodelfits[:,2]))[::-1])),'#33BBFF', linewidth=0,label='1-sigma uncertainties scaled by '+str(scale*100)+'%',alpha=0.5)
+        p.plot(t,newmodelfits[:,2],'-',color='#003333',linewidth=2.0,label='Median model fit')
+        p.pause(5)
 
+    p.savefig('SavingModelPlotTest.png')
     if not residuals:
         #Putting title on upper (non-residuals) graph
         p.title('Best fit model')
         p.legend()
     return modelfits
 
-
+'''
 def StartSingleRun(kic):
-    '''
-    This script uses the KOI data table and associated parameters to start a 'Namaste' run.
-    Finding the transit is still required
-    '''
+    #This script uses the KOI data table and associated parameters to start a 'Namaste' run.
+    #Finding the transit is still required
+
     kic=int(kic)
     AllKicData=KicData(kic)
     lccut, TransData=FindTransitManual(kic)
-    savedlcname=Sourcedir+'KeplerFits/KOI'+str(AllKicData['kepoi_name'].values[0])+'/'+'Transit_LC_at_'+str(TransData[0])+'_lc.txt'
+    savedlcname=Namwd+'KeplerFits/KOI'+str(AllKicData['kepoi_name'].values[0])+'/'+'Transit_LC_at_'+str(TransData[0])+'_lc.txt'
     np.savetxt(savedlcname, lccut)
     StarDat=[AllKicData['koi_steff'].values[0], AllKicData['koi_steff_err1'].values[0],  AllKicData['koi_steff_err2'].values[0], AllKicData['koi_srad'].values[0], AllKicData['koi_srad_err1'].values[0],  AllKicData['koi_srad_err2'].values[0], AllKicData['koi_smass'].values[0], AllKicData['koi_smass_err1'].values[0],  AllKicData['koi_smass_err2'].values[0]]
     #Currently just fudging it to run the other python script from the command line
     print 'python McmcSingles.py \''+str(kic)+', '+savedlcname+', '+str(TransData).replace(' ','')+' , 28000, '+str(StarDat).replace(' ','')+'\'' #['+TransData[0]+', '+TransData[1]+', '+TransData[2]+']
+'''
 
-
-def SaveOutputs(KIC, lsq_fit, weights, finalmodel, lc, samplercut, Rps, Ps, As, StarDat, sigs=np.array([2.2750131948178987, 15.865525393145707, 50.0, 84.13447460685429, 97.7249868051821])):
+def SaveOutputs(KIC, lsq_fit, finalmodel, lc, samplercut, Rps, Ps, As, StarDat, sigs=np.array([2.2750131948178987, 15.865525393145707, 50.0, 84.13447460685429, 97.7249868051821])):
     print 'Saving '+str(KIC)+' outputs to file'
-    np.save(Namwd+'/Outputs/'+str(KIC)+"lsq_fitAug", lsq_fit)
-    np.save(Namwd+'/Outputs/'+str(KIC)+"weightsAug", weights)
-    np.save(Namwd+'/Outputs/'+str(KIC)+"finalmodelAug", finalmodel)
-    np.save(Namwd+'/Outputs/'+str(KIC)+"lightcurveAug", lc)
-    np.save(Namwd+'/Outputs/'+str(KIC)+"samplerAug", samplercut)
+    np.save(Namwd+'/Outputs/'+str(KIC)+"lsq_fit", lsq_fit)
+    np.save(Namwd+'/Outputs/'+str(KIC)+"finalmodel", finalmodel)
+    np.save(Namwd+'/Outputs/'+str(KIC)+"lightcurve", lc)
+    np.save(Namwd+'/Outputs/'+str(KIC)+"sampler", samplercut)
     #Tcen, b, v, p0, F0, u1, u2, Rp, P, sma, Ts, Rs, Ms - 1- and 2-sigma boundaries for each.
     params=np.vstack((np.percentile(samplercut[:, 0], sigs), np.percentile(samplercut[:, 1], sigs), np.percentile(samplercut[:, 2], sigs), np.percentile(samplercut[:, 3], sigs), np.percentile(samplercut[:, 4], sigs), np.percentile(samplercut[:, 5], sigs), np.percentile(samplercut[:, 6], sigs), Rps, Ps, As, np.array([StarDat[0]-2*StarDat[1], StarDat[0]-StarDat[1], StarDat[0], StarDat[0]+StarDat[2], StarDat[0]+2*StarDat[2]]), np.array([StarDat[3]-2*StarDat[4], StarDat[3]-StarDat[4], StarDat[3], StarDat[3]+StarDat[5], StarDat[3]+2*StarDat[5]]), np.array([StarDat[6]-2*StarDat[7], StarDat[6]-StarDat[7], StarDat[6], StarDat[6]+StarDat[8], StarDat[6]+2*StarDat[8]]) ))
 
@@ -498,6 +539,7 @@ if __name__ == '__main__':
     '''
     #Running from the command line
     #Syntax: python Namaste.py KIC lcfilename, [tc , td , d , T,Terr , R,Rerr , M,Merr , nstep=15000]
+    #Currently only works for Kepler and K2 Lightcurves
 
     '''
 
@@ -510,8 +552,8 @@ if __name__ == '__main__':
     parser.add_argument("lcurve",type=str, help="File location of lightcurve file. Type \"get\" to download lightcurve")
 
     #Optional args:
-    parser.add_argument("-n", "--nstep", dest="nstep", default=15000,
-                      help="Number of MCMC steps. Default 15000")
+    parser.add_argument("-n", "--nstep", dest="nstep", default=5000,
+                      help="Number of MCMC steps. Default 5000")
     parser.add_argument("-g", "--gproc", action="store_true", dest="GP", default=False,
                       help="Use to turn on Gaussian Processes")
 
@@ -540,34 +582,41 @@ if __name__ == '__main__':
         rad=np.array(str(args.Rs).split(',')).astype(float)
         mass=np.array(str(args.Ms).split(',')).astype(float)
     except ValueError:
-        print "Error in temp, rad or mass. Assuming not known"
+        print "Error in temp, rad or mass. Assuming not known" if args.verbose else 0
         temp,rad,mass=[0,0],[0,0],[0,0]
     StarDat=[temp[0],temp[1],temp[1],rad[0],rad[1],rad[1],mass[0],mass[1],mass[1]]
     if args.lcurve=="get":
         args.lcurve=getKeplerLC(args.KIC,getlc=False)
     if 0 in StarDat:
         if StarDat[0]!=0:
-            #There's a zero somewhere, bu
+            #There's a zero somewhere, but not for temp!
             temp[1]=150 if temp[1]<150 else temp[1]
             rad=RfromT(temp[0],temp[1])
             mass=MfromR(rad[0],rad[1])
             StarDat=[temp[0],temp[1],temp[1],rad[0],rad[1],rad[1],mass[0],mass[1],mass[1]]
         else:
             #Get stardat from kic/fits file
+            print "Getting Star Data from Kepler fits file and photometric colours" if args.verbose else 0
             StarDat=getStarDat(args.KIC,args.lcurve)
+
     #Running Fit!
-    print args.GP
-    lsq_fit, sampler, weights, finalmodel, StarDat, lc = Run(args.KIC, args.lcurve, np.array((args.Tcen,args.Tdur,args.depth)).astype(float), float(args.nstep), StarDat,GP=args.GP)
-    samplercut=sampler.chain[:,-10000:,:].reshape((-1,7))
+    import datetime
+    tstart=datetime.datetime.now()
+    lsq_fit, sampler, finalmodel, StarDat, lc = Run(args.KIC, args.lcurve, np.array((args.Tcen,args.Tdur,args.depth)).astype(float), float(args.nstep), StarDat,GP=args.GP,verbose=args.verbose)
+    print "Run took: "+str(datetime.datetime.now()-tstart) if args.verbose else 0
+
+    #Taking only last 10000 if more than 10000 samples
+    cut=-1*np.shape(sampler.chain)[1] if np.shape(sampler.chain)[1]<10000 else -10000
+    samplercut=sampler.chain[:,cut:,:].reshape((-1,len(lsq_fit['x'])))
 
     #Doing period calculations from velocity distribution
     Rps, Ps, As,  Krvs = GetVel(samplercut, StarDat, 5000)
-    print str(args.KIC)+" - Period of "+str(Ps[3])+" +"+str(Ps[4]-Ps[3])+"/ -"+str(Ps[3]-Ps[2])
-    print str(args.KIC)+" - Semi Major Axis of "+str(As[3])+" +"+str(As[4]-As[3])+"/ -"+str(As[3]-As[2])
-    print str(args.KIC)+" - Radius of "+str(Rps[3])+" +"+str(Rps[4]-Rps[3])+"/ -"+str(Rps[3]-Rps[2])
+    print str(args.KIC)+" - Period of "+str(Ps[3])+" +"+str(Ps[4]-Ps[3])+"/ -"+str(Ps[3]-Ps[2]) if args.verbose else 0
+    print str(args.KIC)+" - Semi Major Axis of "+str(As[3])+" +"+str(As[4]-As[3])+"/ -"+str(As[3]-As[2]) if args.verbose else 0
+    print str(args.KIC)+" - Radius of "+str(Rps[3])+" +"+str(Rps[4]-Rps[3])+"/ -"+str(Rps[3]-Rps[2]) if args.verbose else 0
 
     #Saving outputs to file
-    SaveOutputs(args.KIC, lsq_fit, weights, finalmodel, lc, samplercut, Rps, Ps, As, StarDat)
+    SaveOutputs(args.KIC, lsq_fit, finalmodel, lc, samplercut, Rps, Ps, As, StarDat)
 
     #Plotting mcmc
-    fig=PlotMCMC(lsq_fit[0],  args.KIC, sampler, lc)
+    fig=PlotMCMC(lsq_fit['x'],  args.KIC, sampler, lc)

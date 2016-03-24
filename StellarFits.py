@@ -48,7 +48,7 @@ def K2Guess(EPIC, colours=0, pm=0, errors=0):
     #It can also take just the B-V, V-J, V-H and V-K colours.
     #Fitzgerald (1970 - A&A 4, 234) http://www.stsci.edu/~inr/intrins.html 
     #[N Sp. Type 	U-B 	(B-V) 	(V-R)C 	(V-I)C 	(V-J) 	(V-H) 	(V-K) 	(V-L) 	(V-M) 	(V-N) 	(V-R)J 	(V-I)J  Temp    Max Temp]
-    Returns:
+    #Returns:
     #   Spec Types, Temps, Radii, Masses.
     '''
     import csv
@@ -143,7 +143,8 @@ def coloursCheck(colours0):
     return Mult*Ts, Specs, Mult*Rs, Mult*Ms
 
 def K2Lookup(EPIC):
-    '''Finds the filename and location for any K2 EPIC (ID)'''
+    '''
+    #Finds the filename and location for any K2 EPIC (ID)'''
     EPIC=str(EPIC).split('.')[0]
     tab=np.genfromtxt('/home/astro/phrnbe/PyFolder/KTwo/EPIC_FileLocationTable2.txt', dtype=str)
     if EPIC in tab[:, 0]:

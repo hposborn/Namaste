@@ -36,6 +36,9 @@ code(python Namaste.py --help)
 				from colours
 	  -q, --quiet           don't print status messages to stdout
 
+Example lightcurves for KIC 3239945 are provided and can be run with the line:
+	python Namaste.py 3239945 get
+
 ###Acknowledgements###
 The python modules emcee and george form the engine of this script, and all credit to Dan Foreman-Mackey for that
 Transit-fitting code courtesy of Ian Crossfield.

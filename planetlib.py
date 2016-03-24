@@ -413,7 +413,7 @@ def getStarDat(kic,file=''):
     StarData Object [T,Terr,R,Rerr,M,Merr]
 
     '''
-    #Looking in datafile:
+    #Looking in datafile for K2 stars:
     if str(int(kic)).zfill(9)[0]=='2':
         Ts = K2Guess(int(kic))
         if Ts==None and file!='':
@@ -427,6 +427,7 @@ def getStarDat(kic,file=''):
     else:
         try:
             import pandas as pd
+            #One problem is that this table is not particularly up to date and has huge Radii errors...
             koitable=pd.read_csv(Namwd+'/KeplerKOItable.csv',skiprows=155)
             match=koitable[koitable['kepid']==int(kic)]
             return list(abs(np.array([match['koi_steff'].values[0], match['koi_steff_err1'].values[0],  match['koi_steff_err2'].values[0], match['koi_srad'].values[0], match['koi_srad_err1'].values[0],  match['koi_srad_err2'].values[0], match['koi_smass'].values[0], match['koi_smass_err1'].values[0],  match['koi_smass_err2'].values[0]])))
@@ -439,7 +440,7 @@ def getStarDat(kic,file=''):
                     M,Merr=MfromR(R,Rerr)
                     return [Ts[0],Ts[1],R,Rerr,M,Merr]
     print "Unable to get Star Data from catalogues or colours."
-    #Does this kill the script here:
+    #Does this kill the script here?
     pass
 
 def FitsGuess(file):
