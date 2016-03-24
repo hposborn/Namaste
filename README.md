@@ -6,7 +6,9 @@ Namaste is a Bayesian transit-fitting programme to predict the size, orbit, etc 
 
 ### Usage ###
 To bring up the argument options type
-code(python Namaste.py --help)
+	python Namaste.py --help
+
+Which displays:
 
 	usage: Namaste.py [-h] [-n NSTEP] [-g] [-tc TCEN] [-td TDUR] [-d DEPTH]
 			  [-ts TS] [-rs RS] [-ms MS] [-q]
