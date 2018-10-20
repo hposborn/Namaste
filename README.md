@@ -2,7 +2,7 @@
 
 Namaste is a Bayesian transit-fitting programme to predict the size, orbit, etc of exoplanets from just a single transit. 
 
-
+This is the old version of Namaste. The newer version is either in master or Namaste2 branches
 
 ### Usage ###
 To bring up the argument options type
