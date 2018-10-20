@@ -66,7 +66,7 @@ class Settings():
         #self.error = False               # No error detected
         #self.error_comm = ''             # Error description
         #self.use_previous_samples = False# Using samaples from past run
-        self.fitsloc = './FitsFiles/'     # Storage location to load stuff
+        self.fitsloc = './InputFiles/'     # Storage location to load stuff
         self.outfilesloc = './Outputs/'   # Storage location to save stuff
         self.cadence = 0.0204318          # Cadence. Defaults to K2
         self.kernel = 'quasi'             # Kernel for use in GPs
