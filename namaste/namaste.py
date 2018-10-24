@@ -1425,9 +1425,9 @@ def getKeplerLDs(Ts,logg=4.43812,FeH=0.0,how='2'):
 
     #arr = np.genfromtxt("KeplerLDlaws.txt",skip_header=2)
     try:
-        arr = np.genfromtxt("/Users/hosborn/Postdoc/K2/Namaste_2/namaste/KeplerLDlaws.txt",skip_header=2)
+        arr = np.genfromtxt("KeplerLDlaws.txt",skip_header=2)
     except:
-        arr = np.genfromtxt("/home/hosborn/Namaste/Namaste_2/namaste/KeplerLDlaws.txt",skip_header=2)
+        arr = np.genfromtxt("KeplerLDlaws.txt",skip_header=2)
     FeHarr=np.unique(arr[:, 2])
     #Just using a single value of FeH
     if not (type(FeH)==float) and not (type(FeH)==int):
